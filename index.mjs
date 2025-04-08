@@ -209,7 +209,7 @@ app.post('/add_msg', async (req, res) => {
 app.post('/get_threads', async(req, res)=>{
   console.log(req.body.iduser)
   const [rows] = await connection.query(
-    'SELECT * FROM threads WHERE id_user = ?',
+    'SELECT * FROM threads WHERE id_user = ? ORDER BY id DESC',
     [req.body.iduser]
   );
   console.log(rows);
@@ -254,43 +254,63 @@ app.post('/get_thread', async(req, res)=>{
 app.post('/new_thread', async(req, res)=>{
   let {iduser, nameThread} = req.body;
 
-  let [results] = await connection.query('INSERT INTO threads(id_user, name) VALUES (?, ?)', 
-    [iduser, nameThread]
-  )
-  // créer un nouveau thread
-  let thread = await openai.beta.threads.create();
-  req.session.threadId = thread.id; 
+  // before isnerting, check if the name already exist
+  let [e] = await connection.query('SELECT * FROM threads WHERE name=?',[nameThread])
+  console.log(e)
+  console.log(e.length)
+  if(e.length != 0){
+    res.json({err:true})
+  }
+  
+  else{
+    let [results] = await connection.query('INSERT INTO threads(id_user, name) VALUES (?, ?)', 
+      [iduser, nameThread]
+    )
+    // créer un nouveau thread
+    let thread = await openai.beta.threads.create();
+    req.session.threadId = thread.id; 
+  
+    // passer un message d'accueil
+    await openai.beta.threads.messages.create(
+      thread.id,
+      {
+          role:'assistant',
+          content: 'Bonjour, je suis votre assistant juridique, comment puis-je vous aider ?'
+      }
+    );
+  
+    await connection.query("INSERT INTO messages(message,sender, _time, id_thread) VALUES (?, ?, ?, ?)", 
+      ['Bonjour, je suis votre assistant juridique, comment puis-je vous aider ?',
+        'assistant',
+        new Date().toISOString(),
+        results.insertId
+      ]
+    );
 
-  // passer un message d'accueil
-  await openai.beta.threads.messages.create(
-    thread.id,
-    {
-        role:'assistant',
-        content: 'Bonjour, je suis votre assistant juridique, comment puis-je vous aider ?'
-    }
-  );
 
-  await connection.query("INSERT INTO messages(message,sender, _time, id_thread) VALUES (?, ?, ?, ?)", 
-    ['Bonjour, je suis votre assistant juridique, comment puis-je vous aider ?',
-      'assistant',
-      new Date().toISOString(),
-      results.insertId
-    ]
-  );
+
+    const [rows] = await connection.query(
+      'SELECT * FROM threads WHERE id_user = ? ORDER BY id DESC',
+      [req.body.iduser]
+    );
+  
+    res.json({
+      success: true,
+      insertedId: results.insertId,
+      message: 'Bonjour, je suis votre assistant juridique, comment puis-je vous aider ?',
+      rows:rows
+    });
 
 
 
-  const [rows] = await connection.query(
-    'SELECT * FROM threads WHERE id_user = ?',
-    [req.body.iduser]
-  );
 
-  res.json({
-    success: true,
-    insertedId: results.insertId,
-    message: 'Bonjour, je suis votre assistant juridique, comment puis-je vous aider ?',
-    rows:rows
-  });
+
+  }
+  
+
+
+
+  
 
 })
 
@@ -317,7 +337,7 @@ app.post('/delete_thread', async(req, res)=>{
   await connection.query('DELETE FROM messages WHERE id_thread = ?', [threadId])
 
   const [rows] = await connection.query(
-    'SELECT * FROM threads WHERE id_user = ?',
+    'SELECT * FROM threads WHERE id_user = ? ORDER BY id DESC',
     [req.body.iduser]
   );
 
@@ -325,6 +345,31 @@ app.post('/delete_thread', async(req, res)=>{
   res.json({rows:rows})
     
 })
+
+
+
+
+
+app.post('/change_assistant', async(req, res)=>{
+
+  const [results] = await connection.query(
+    'INSERT INTO messages(message, sender, _time, id_thread) VALUES (?, ?, ?, ?)',
+    [req.body.msg, "assistant", new Date().toISOString(), req.body.threadId],
+
+  );
+
+  
+  await openai.beta.threads.messages.create(
+    req.session.threadId,
+    {
+        role:'assistant',
+        content: req.body.msg
+    }
+  );
+  res.json({done:true, id: results.insertedId})
+
+})
+
 
 
 const PORT = process.env.PORT || 3000; 
