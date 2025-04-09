@@ -50,17 +50,19 @@ app.use(express.json());
 import session from 'express-session';
 
 app.use(session({
-  secret: 'super-secret-key',       // à personnaliser
+  secret: 'super-secret-key',    
   resave: false,
   saveUninitialized: true,
-  cookie: { secure: false }         // ✅ false en local (dev), true avec HTTPS
+  cookie: { secure: false }     
 }));
   
-// // 🌐 CORS
+
+// 🌐 CORS
 app.use(cors({
-    origin: 'http://localhost:5173', // adresse de ton front React
-    credentials: true
+  origin: process.env.CLIENT_URL,
+  credentials: true
 }));
+
 
 // app.set('view engine', 'ejs');
 app.use(express.static('public'));
