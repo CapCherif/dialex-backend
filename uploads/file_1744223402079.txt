@@ -1,0 +1,18 @@
+from elasticsearch import Elasticsearch, helpers
+from sentence_transformers import SentenceTransformer
+
+
+
+
+
+
+es = Elasticsearch(
+    hosts=["https://91.134.99.68:9200/"],  # Replace with your actual Elasticsearch host
+    basic_auth=("elastic", "password"),  # If authentication is enabled
+    verify_certs=False
+)
+
+
+count = es.count(index="ressource_v4_final")["count"]
+
+print(count)
