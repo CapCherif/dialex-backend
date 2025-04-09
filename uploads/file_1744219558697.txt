@@ -1,0 +1,395 @@
+
+
+
+from datetime import datetime, timezone
+import json
+import re
+from elasticsearch.helpers import bulk
+from elasticsearch import Elasticsearch
+
+# Connexion à ElasticSearch
+#es = Elasticsearch("http://localhost:9200", verify_certs=False, request_timeout=30)
+
+from sentence_transformers import SentenceTransformer
+
+
+
+# Charger SentenceTransformer
+model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+
+
+def generate_embedding(fields):
+    combined_text = " ".join(fields)  # Concaténer les champs non vides
+    embedding = model.encode(combined_text).tolist()  # Générer l'embedding
+    return embedding
+
+def CreateEmbedding(source, model):
+    # source = record["_source"]
+        
+    # Exemple de champ à utiliser pour calculer l'embedding
+    title = " ".join([x["text"] for x in source.get('lom_1_2_title', []) if x.get("text")]) if source.get('lom_1_2_title', []) else ""
+    # print(title)
+    desc = source['lom_1_4_description']["text"]
+    description = ""
+    if isinstance(desc, list):
+        description = " ".join([ x for x in desc])
+    elif desc is not None:
+        description = desc
+    
+    desc63 = source['lom_6_3_description']
+    description63 = ""
+
+    if isinstance(desc63, list):
+        description63 = " ".join([ x["text"] for x in desc63])
+    elif desc63 is not None:
+        description63 = desc63
+        
+    # title, resumé, description, author, keyword,
+    authors = " ".join([author["entityName"] for author in source.get("lom_2_4_contribute_author", "") ] )
+    editors = " ".join([editor["entityName"] for editor in source.get("lom_2_5_contribute_editor", "") ] )
+    contribute23 = " ".join([cont["entityName"] for cont in source.get("lom_2_3_contribute", "") ] )
+    keyword = ""
+    try:
+        keyword = " ".join([kw["text"] for kw in source["lom_1_5_keyword"]])
+        print(keyword)
+    except:
+        print("pas de keyword")
+
+
+    fusion = title + " "+ description + " " + authors + " " + editors + " " + description63 + " " + contribute23 + " " + keyword
+ 
+    # Calculer l'embedding
+    embedding = model.encode(fusion).tolist()
+    
+    return embedding
+
+
+es = Elasticsearch(
+    hosts=["https://91.134.99.68:9200/"],  # Replace with your actual Elasticsearch host
+    # basic_auth=("elastic", "AWSDgd0i=8rb2GBm8LV1"),  # If authentication is enabled nKGAo8ApdZ7+NUdDVv3Q
+    basic_auth=("elastic", "nKGAo8ApdZ7+NUdDVv3Q"),  # If authentication is enabled nKGAo8ApdZ7+NUdDVv3Q
+    verify_certs=False
+)
+
+
+def process_instance(instance):
+    """
+    @xmlns:dc
+    @xmlns:oai_dc
+    @xmlns:xsi
+    @xsi:schemaLocation
+    dc:contributor
+    dc:creator
+    dc:date
+    dc:description
+    dc:format
+    dc:identifier
+    dc:language
+    dc:publisher
+    dc:rights
+    dc:subject
+    dc:title
+    dc:type
+    """
+    global model
+    deleted = instance["header"].get("@status", None)
+    if not deleted:
+        date =  datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        titre = instance["metadata"]["oai_dc:dc"]["dc:title"]
+        title = []
+
+        if isinstance(titre, dict):
+            # Ajouter le dictionnaire directement
+            title.append({
+                "text": titre.get("#text", ""),
+                "lang": titre.get("@xml:lang", None)
+            })
+        elif isinstance(titre, list):
+            # Parcourir les éléments de la liste et structurer chaque élément
+            for ins in titre:
+                if isinstance(ins, dict):
+                    title.append({
+                        "text": ins.get("#text", ""),
+                        "lang": ins.get("@xml:lang", None)
+                    })
+                else:
+                    title.append({
+                        "text": str(ins),
+                        "lang": None
+                    })
+        else:
+            # Ajouter un seul titre si c'est une chaîne
+            title.append({
+                "text": str(titre),
+                "lang": None
+            })
+        data = instance["metadata"].get("oai_dc:dc")
+        _type = data.get("dc:type", None)
+      
+        lom_1_5_keyword = []
+        subjects = data.get("dc:subject", [])
+        
+        if isinstance(subjects, dict):  # Si `dc:subject` est un seul document
+          
+            lom_1_5_keyword.append({"lang": "fra", "text": subjects["#text"]})
+          
+
+        elif isinstance(subjects, list):  # Si `dc:subject` est une liste de documents
+            for subject in subjects:
+                if isinstance(subject, dict) :
+                    lom_1_5_keyword.append({"lang": "fra", "text": subject["#text"]})
+                else:
+                    lom_1_5_keyword.append({"lang": "fra", "text": subject})
+        else:  
+            lom_1_5_keyword.append({"lang": "fra", "text": subjects})
+
+        format_data = data.get("dc:format", None)
+
+        # Vérifier que format_data est une chaîne non vide et le transformer en tableau
+        if format_data and isinstance(format_data, str) and format_data.strip():
+            # Séparer en utilisant les délimiteurs ',' et ';', tout en nettoyant les espaces inutiles
+            lom_4_1_format = [item.strip() for item in re.split(r'[;,]', format_data) if item.strip()]
+            # Si la liste résultante est vide après nettoyage, assigner None
+            if not lom_4_1_format:
+                lom_4_1_format = None
+        else:
+            # Si le champ est vide ou absent, insérer None
+            lom_4_1_format = None
+        
+        dcdesc = data.get('dc:description', None)
+        res_desc = ""
+        if dcdesc is not None and isinstance(dcdesc, dict):
+            res_desc = dcdesc['#text']
+        elif isinstance(dcdesc, list):
+            for ds in dcdesc:
+                if isinstance(ds, str):
+                    res_desc+= " " + ds
+                elif isinstance(ds, dict):
+                    res_desc += " " + ds['#text']
+        elif isinstance(dcdesc, str):
+            res_desc = dcdesc
+
+        else:
+            res_desc=  None 
+
+
+
+        dt = data.get('dc:date', None)
+
+        rdt=""
+        if isinstance(dt, list):            
+            rdt = dt[0]['#text']
+        elif isinstance(dt, dict):
+            rdt = dt['#text']
+        elif dt is not None:
+            rdt = dt
+        else:
+            rdt =""
+
+        creators = [creator['#text'] if isinstance(creator, dict) else creator for creator in data.get('dc:creator', '')]
+        transformed = {
+            "lom_1_9_documenttype": [
+                {"label": "text", "value": item, "source": "oai_dc"} for item in _type ] if isinstance(_type, list) else [{"label": "text", "value": _type, "source": "oai_dc"}],
+            
+            "lom_4_1_format": lom_4_1_format,
+            
+            "lom_1_2_title": title,
+            
+            "lom_1_4_description": {
+                "text": res_desc,
+                "lang": None
+            },
+            
+            "pr_modify_time": date,
+            
+            "lom_2_4_contribute_author": [
+                {"dateTime": rdt,
+                 "source": "oai_dc",
+                 "label": "auteur",
+                 "value": "auteur",
+                 "entityName": creator,
+                 "entity": f"""BEGIN:VCARD
+        FN:{creator}
+        END:VCARD"""
+                 
+                 } for creator in
+                # (data.get("dc:creator") if isinstance(data.get("dc:creator"), list) else [data.get("dc:creator")]) if
+                creators
+            ],
+            
+            "lom_1_5_keyword": lom_1_5_keyword,
+            
+            "lom_2_5_contribute_editor": [
+                {"dateTime": rdt,
+                 "source": "oai_dc",
+                 "label": "éditeur de publication",
+                 "value": "éditeur de publication",
+                 "entityName": publisher,
+                 "entity": f"""BEGIN:VCARD
+        FN:{publisher}
+        END:VCARD"""
+                 } for publisher in
+                (data.get("dc:publisher") if isinstance(data.get("dc:publisher"), list) else [data.get("dc:publisher")])
+                if publisher
+            ],
+            
+            "lom_1_1_identifier": [{"entry": identifier, "catalog": "URI"} for identifier in (
+                data.get("dc:identifier") if isinstance(data.get("dc:identifier"), list) else [
+                    data.get("dc:identifier")]) if identifier],
+            
+            "lom_1_3_language": data.get("dc:language", []),
+            
+            "lom_6_3_description": [
+                {
+                    "text": right.get("#text", right),
+                    "lang": right.get("@xml:lang", "fra")
+                } if isinstance(right, dict) else {"text": right, "lang": "fra"}
+                for right in
+                (data.get("dc:rights") if isinstance(data.get("dc:rights"), list) else [data.get("dc:rights")]) if right
+            ],
+            
+            "lom_2_3_contribute": [
+                {
+                    "source": "oai_dc",
+                    "label": "contributeur",
+                    "value": "contributeur",
+                    "entityName": contributor.get("dc:creator", "") if isinstance(contributor, dict) else str(
+                        contributor),
+                    "entity": f"""BEGIN:VCARD
+FN:{contributor.get("dc:creator", "") if isinstance(contributor, dict) else str(contributor)}
+END:VCARD"""
+                }
+                for contributor in (
+                    data.get("dc:contributor") if isinstance(data.get("dc:contributor"), list) else [
+                        data.get("dc:contributor")]
+                )
+                if contributor  # Exclure les valeurs nulles ou vides
+            ],
+            
+            "pr_abonnement": None,
+            
+            "lom_5_9_typicallearningtime": None,
+            
+            "lom_4_2_size": None,
+            
+            "lom_4_7_duration": None,
+            
+            "lom_5_4_semanticdensity": None,
+            
+            "pr_source": "doaj",
+            
+            "lom_5_3_interactivitelevel": None,
+        }
+
+        # embed = CreateEmbedding(transformed, model)
+        # transformed['embedding'] = embed
+
+        return transformed
+
+
+
+
+
+
+
+
+
+
+
+import os, time
+import warnings
+
+warnings.simplefilter('ignore')
+
+
+
+id_ = 1902901
+push = False
+ch = open('doaj-check.txt', 'r').read()
+if ch != "":
+    ch = ch.split(',')
+    f = ch[0].split(':')[1]
+    idd = int(ch[1].split(':')[1])
+else:
+    push = True
+
+
+
+folder = "doaj"
+
+for i in range(6, 9):
+    for file in os.listdir(folder+"/data_"+str(i)):
+        if not push:           
+            print('not on : ' ,file)
+            if f == folder+"/data_"+str(i)+"/"+file:
+                push = True
+                id_=idd
+                # if id_ < 1:
+                #     id_ = 1        
+            
+        if push:
+            with open(folder+"/data_"+str(i)+"/"+file, "r", encoding="utf-8") as f:
+                records = json.load(f)
+                print(len(records))
+
+            for record in records:
+                
+                #index_in_elasticsearch(rec_clean, "hal_metadata" )
+                if record["header"].get("@status", None) != "deleted":
+                    try:
+                    
+                        rec_clean = process_instance(record)
+                        # Indexer le document
+                        response = es.index(index="ressource_v4",  body=rec_clean, id="doaj_"+str(id_))
+                        print(f"Document indexé : {response['_id']}")
+                        # print(rec_clean)
+                        # break
+                        if id_ % 50 == 0:
+                            print('sleep.....')
+                            time.sleep(1)
+                        id_ += 1
+                        open('doaj-check.txt', 'w').write('file:'+folder+"/data_"+str(i)+"/"+file+", id:"+str(id_))
+                        
+                    except Exception as e:
+                        print(f"Erreur d'indexation : {str(e)}")
+                        # print(record)
+                else:
+                    print('document supprimé............')
+
+            
+            # break
+        # break
+        
+            
+
+    # print('changement de fichier', id_)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    

@@ -4,6 +4,34 @@ dotenv.config();
 import OpenAI from "openai";
 import express from "express";
 import cors from 'cors';
+import multer from 'multer';
+
+import path from "path";
+import fs from "fs";
+
+
+const uploadDir = './uploads';
+
+
+// Configurer multer pour le stockage des fichiers
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    // Spécifier le répertoire où les fichiers seront stockés
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    // Renommer le fichier pour éviter les conflits
+    cb(null, 'file_'+Date.now() + path.extname(file.originalname));
+  }
+});
+
+// Créer un middleware pour gérer les fichiers
+const upload = multer({ storage: storage });
+
+
+
+
+
 
 const openai = new OpenAI({
     organization: "parene",
@@ -116,11 +144,11 @@ import connection from "./db.mjs";
 
 
 
-app.post('/add_msg', async (req, res) => {
+app.post('/add_msg',upload.single('file'), async (req, res) => {
     let threadId;
     const assistant_id = req.body.assistant_id;
     console.log(assistant_id)
-
+   
 
     // try {
         // Vérifier si un thread existe en session, sinon créer un nouveau thread
@@ -139,26 +167,53 @@ app.post('/add_msg', async (req, res) => {
         // stocker le message dans la bd
 
         connection.query(
-          'INSERT INTO messages(message, sender, _time, id_thread) VALUES (?, ?, ?, ?)',
-          [req.body.msg, "user", new Date().toISOString(), req.body.threadId],
+          'INSERT INTO messages(message, sender, _time, id_thread, isFile) VALUES (?, ?, ?, ?,?)',
+          [req.body.msg, "user", new Date().toISOString(), req.body.threadId, 0],
 
         );
 
+        if(req.file){
+          connection.query(
+            'INSERT INTO messages(message, sender, _time, id_thread, isFile) VALUES (?, ?, ?, ?, ?)',
+            [req.file.filename, "user", new Date().toISOString(), req.body.threadId, 1],
+  
+          );
+        }
+       
+        
+        if(req.file){
 
+          const aapl10k = await openai.files.create({
+            file: fs.createReadStream('uploads/'+req.file.filename),
+            purpose: "assistants",
+          });
 
-        // Envoi du message de l'utilisateur dans le thread
-        const message = await openai.beta.threads.messages.create(
+          const message = await openai.beta.threads.messages.create(
+            threadId,
+            {
+                role: "user",
+                content: req.body.msg,
+                attachments: [{ file_id: aapl10k.id, tools: [{ type: "file_search" }] }],
+            },
+          );
+
+        }
+        else{
+          const message = await openai.beta.threads.messages.create(
             threadId,
             {
                 role: "user",
                 content: req.body.msg
             }
         );
+        }
+       
+
 
         // Lancer l'Assistant
         const run = await openai.beta.threads.runs.createAndPoll(threadId, {
             assistant_id: assistant_id,
-            instructions: "Adresse toi à l'utilisateur qui porte le prénom de Cherif",
+            instructions: "Adresse toi à l'utilisateur en tant que juriste",
         });
 
         // Vérifier si l'exécution est terminée
@@ -187,12 +242,16 @@ app.post('/add_msg', async (req, res) => {
             );
           
             console.log('Dernier ID inséré:', results.insertId);
-          
-            res.json({
+            var response = {
               success: true,
               insertedId: results.insertId,
-              response: lastMessage.content
-            });
+              response: lastMessage.content,
+             
+            }
+            if(req.file){
+              response['filename'] = req.file.filename;
+            }
+            res.json(response);
 
         } else {
             res.json({ response: "Pas de réponse de l'IA." });
@@ -234,13 +293,32 @@ app.post('/get_thread', async(req, res)=>{
 
   // alimenter le thread avec les message
   rows.forEach(async (row)=>{
-    await openai.beta.threads.messages.create(
-      thread.id,
-      {
-          role: row.sender,
-          content: row.message
-      }
-    );
+    if(row.isFile){
+
+      const aapl10k = await openai.files.create({
+        file: fs.createReadStream('uploads/'+row.message),
+        purpose: "assistants",
+      });
+
+      await openai.beta.threads.messages.create(
+        thread.id,
+        {
+            role: row.sender,
+            content: row.message,
+            attachments:[{ file_id: aapl10k.id, tools: [{ type: "file_search" }] }]
+        }
+      );
+    }
+    else{
+      await openai.beta.threads.messages.create(
+        thread.id,
+        {
+            role: row.sender,
+            content: row.message
+        }
+      );
+    }
+    
   })
 
     
