@@ -95,53 +95,6 @@ import connection from "./db.mjs";
 
 
 
-// let assistant_id = "asst_tyivYhJFEgjxP1cK8ImsB6EX"; 
-// async function main() {
-//   try {
-//     // Création de l'assistant
-//     // const assistant = await openai.beta.assistants.create({
-//     //   name: "Math Tutor",
-//     //   instructions: "You are a personal math tutor. Write and run code to answer math questions.",
-//     //   tools: [{ type: "code_interpreter" }],
-//     //   model: "gpt-4o"
-//     // });
-
-//     // console.log("Assistant ID :", assistant.id);
-//     // Création du thread
-//     const thread = await openai.beta.threads.create();
-
-//     // Envoi d'un message utilisateur
-//     const message = await openai.beta.threads.messages.create(thread.id, {
-//       role: "user",
-//       content: "I need to solve the equation `3x + 11 = 14`. Can you help me?"
-//     });
-
-//     // Démarrage de l'assistant
-//     const run = await openai.beta.threads.runs.createAndPoll(thread.id, {
-//       assistant_id: "asst_tyivYhJFEgjxP1cK8ImsB6EX",
-//       instructions: "Adresse toi à l'utilisateur qui porte le prénom de Cherif"
-//     });
-
-//     if (run.status !== "completed") {
-//       console.log("Pas de réponse de l'assistant.");
-//       return;
-//     }
-
-//     // Récupération des messages du thread
-//     const messages = await openai.beta.threads.messages.list(thread.id);
-//     const lastMessage = messages.data.find(msg => msg.role === "assistant");
-
-//     console.log("Réponse de l'assistant :", lastMessage?.content?.[0]?.text?.value ?? lastMessage);
-
-//   } catch (error) {
-//     console.error("Erreur dans l'exécution :", error);
-//   }
-// }
-
-
-// main()
-
-
 
 
 app.post('/add_msg',upload.single('file'), async (req, res) => {
@@ -167,15 +120,15 @@ app.post('/add_msg',upload.single('file'), async (req, res) => {
         // stocker le message dans la bd
 
         connection.query(
-          'INSERT INTO messages(message, sender, _time, id_thread, isFile) VALUES (?, ?, ?, ?,?)',
-          [req.body.msg, "user", new Date().toISOString(), req.body.threadId, 0],
+          'INSERT INTO messages(message, sender, _time, id_thread, isFile, id_assistant, mode_assistant) VALUES (?, ?, ?, ?,?,?,?)',
+          [req.body.msg, "user", new Date().toISOString(), req.body.threadId, 0,assistant_id, req.body.mode],
 
         );
 
         if(req.file){
           connection.query(
-            'INSERT INTO messages(message, sender, _time, id_thread, isFile) VALUES (?, ?, ?, ?, ?)',
-            [req.file.filename, "user", new Date().toISOString(), req.body.threadId, 1],
+            'INSERT INTO messages(message, sender, _time, id_thread, isFile, id_assistant, mode_assistant) VALUES (?, ?, ?, ?, ?,?,?)',
+            [req.file.filename, "user", new Date().toISOString(), req.body.threadId, 1,assistant_id, req.body.mode],
   
           );
         }
@@ -232,12 +185,14 @@ app.post('/add_msg',upload.single('file'), async (req, res) => {
             // stocker le message de l'ia dans la bd
             console.log('lastMessage existe bien')
             const [results] = await connection.query(
-              'INSERT INTO messages (message, sender, _time, id_thread) VALUES (?, ?, ?, ?)',
+              'INSERT INTO messages (message, sender, _time, id_thread, id_assistant, mode_assistant) VALUES (?, ?, ?, ?, ?, ?)',
               [
                 lastMessage.content[0].text.value, // Message
                 'assistant', // Expéditeur
                 _time, // Heure
-                req.body.threadId // ID du thread
+                req.body.threadId, // ID du thread,
+                assistant_id,
+                req.body.mode
               ]
             );
           
@@ -290,7 +245,8 @@ app.post('/get_thread', async(req, res)=>{
   );
   console.log(rows);
 
-
+  let latestObj = rows[rows.length - 1];
+  console.log(latestObj)
   // alimenter le thread avec les message
   rows.forEach(async (row)=>{
     if(row.isFile){
@@ -321,10 +277,9 @@ app.post('/get_thread', async(req, res)=>{
     
   })
 
-    
 
 
-  res.json({rows:rows})
+  res.json({rows:rows, id_assistant : latestObj.id_assistant , mode:latestObj.mode_assistant})
 })
 
 
@@ -353,15 +308,18 @@ app.post('/new_thread', async(req, res)=>{
       thread.id,
       {
           role:'assistant',
-          content: 'Bonjour, je suis votre assistant juridique, comment puis-je vous aider ?'
+          content: 'Bonjour, je suis votre assistant juridique spécialisé dans la conversation, comment puis-je vous aider ?'
       }
     );
   
-    await connection.query("INSERT INTO messages(message,sender, _time, id_thread) VALUES (?, ?, ?, ?)", 
-      ['Bonjour, je suis votre assistant juridique, comment puis-je vous aider ?',
+    await connection.query("INSERT INTO messages(message,sender, _time, id_thread, mode_assistant, id_assistant) VALUES (?, ?, ?, ?, ?,?)", 
+      ['Bonjour, je suis votre assistant juridique spécialisé dans la conversation, comment puis-je vous aider ?',
         'assistant',
         new Date().toISOString(),
-        results.insertId
+        results.insertId,
+        
+        "conversation",
+        "asst_ufQ7CW20LTyC0Wi22jVOigWN"
       ]
     );
 
@@ -375,8 +333,8 @@ app.post('/new_thread', async(req, res)=>{
     res.json({
       success: true,
       insertedId: results.insertId,
-      message: 'Bonjour, je suis votre assistant juridique, comment puis-je vous aider ?',
-      rows:rows
+      message: 'Bonjour, je suis votre assistant juridique spécialisé dans la conversation, comment puis-je vous aider ?',
+      rows:rows,
     });
 
 
@@ -431,8 +389,8 @@ app.post('/delete_thread', async(req, res)=>{
 app.post('/change_assistant', async(req, res)=>{
 
   const [results] = await connection.query(
-    'INSERT INTO messages(message, sender, _time, id_thread) VALUES (?, ?, ?, ?)',
-    [req.body.msg, "assistant", new Date().toISOString(), req.body.threadId],
+    'INSERT INTO messages(message, sender, _time, id_thread,mode_assistant, id_assistant) VALUES (?, ?, ?, ?, ?, ?)',
+    [req.body.msg, "assistant", new Date().toISOString(), req.body.threadId, req.body.mode_assistant, req.body.id_assistant],
 
   );
 
