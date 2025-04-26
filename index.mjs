@@ -56,11 +56,13 @@ app.use(session({
   cookie: { secure: false }         // ✅ false en local (dev), true avec HTTPS
 }));
   
-// // 🌐 CORS
+// 🌐 CORS
 app.use(cors({
-    origin: 'http://localhost:5173', // adresse de ton front React
-    credentials: true
+  origin: process.env.CLIENT_URL,
+  credentials: true
 }));
+
+
 
 // app.set('view engine', 'ejs');
 app.use(express.static('public'));
@@ -71,28 +73,6 @@ app.use(express.static('public'));
 
 // connexion a mysql
 import connection from "./db.mjs";
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
